@@ -1,9 +1,9 @@
 name: deploy-ssh
 
 on:
-  workflow_dispatch:        # Bisa dijalankan manual
+  workflow_dispatch:
   release:
-    types: [published]      # Jalan otomatis saat Release baru dibuat
+    types: [published]
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -19,10 +19,10 @@ jobs:
         uses: robinraju/release-downloader@v1.11
         with:
           repository: ${{ github.repository }}
-          latest: true
-          fileName: "app.zip"
+          tag: latest                # FIX: pengganti latest: true
+          file-name: "app.zip"       # FIX: parameter benar (bukan fileName)
 
-      # 2. Add server SSH Host Key (Host Key Pinning)
+      # 2. Add server SSH Host Key
       - name: Add server host key
         run: |
           mkdir -p ~/.ssh
@@ -30,7 +30,7 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
 
-      # 3. Upload app.zip to server via SCP
+      # 3. Upload app.zip ke server
       - name: Copy app.zip to server
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -41,7 +41,7 @@ jobs:
           target: "/srv/fayaz/"
           overwrite: true
 
-      # 4. Deploy ke server via SSH
+      # 4. Deploy via SSH
       - name: Deploy via SSH (atomic + systemd)
         uses: appleboy/ssh-action@v1.1.0
         with:
@@ -52,14 +52,11 @@ jobs:
             set -euo pipefail
             cd /srv/fayaz
 
-            # Timestamp untuk folder release
             ts="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
             mkdir -p "releases/$ts"
 
-            # Unzip file ke dalam folder release
             unzip -o app.zip -d "releases/$ts"
 
-            # Install dependencies (production)
             cd "releases/$ts"
             if [ -f "package-lock.json" ]; then
               npm ci --omit=dev
@@ -67,16 +64,14 @@ jobs:
               npm install --omit=dev
             fi
 
-            # Update symlink 'current' → rilis terbaru
             ln -sfn "/srv/fayaz/releases/$ts" /srv/fayaz/current
 
-            # Restart systemd service
             sudo systemctl restart fayaz
 
-            # Health check
             sleep 5
-            curl -fsS http://localhost:3000/health \
-              || (sudo journalctl -u fayaz -n 50 --no-pager; exit 1)
+            if ! curl -fsS http://localhost:3000/health; then
+              sudo journalctl -u fayaz -n 50 --no-pager
+              exit 1
+            fi
 
-            # Hapus rilis lama (sisakan 5 terbaru)
             ls -1dt /srv/fayaz/releases/* | tail -n +6 | xargs -r rm -rf

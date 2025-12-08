@@ -1,36 +1,30 @@
 name: deploy-ssh
-
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Bisa dijalankan manual
   release:
-    types: [published]
-
+    types: [published] # Jalan otomatis saat Release baru dibuat
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. Download file app.zip dari Release terbaru
+      # 1. Download artifact (zip) dari Release GitHub
       - name: Download app.zip from latest release
         uses: robinraju/release-downloader@v1.11
         with:
           repository: ${{ github.repository }}
-          tag: latest                # FIX: pengganti latest: true
-          file-name: "app.zip"       # FIX: parameter benar (bukan fileName)
-
-      # 2. Add server SSH Host Key
-      - name: Add server host key
+          latest: true
+          fileName: "app.zip"
+      # 2. Daftarkan Host Key Server (mencegah Man-in-the-Middle)
+      - name: Add server host key (pin)
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
-
-      # 3. Upload app.zip ke server
+      # 3. Copy file zip ke server
       - name: Copy app.zip to server
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -39,10 +33,8 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           source: "app.zip"
           target: "/srv/fayaz/"
-          overwrite: true
-
-      # 4. Deploy via SSH
-      - name: Deploy via SSH (atomic + systemd)
+      # 4. Eksekusi Deployment via SSH
+      - name: Deploy via SSH (atomic release + systemd)
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -52,11 +44,14 @@ jobs:
             set -euo pipefail
             cd /srv/fayaz
 
+            # Buat folder release unik berdasarkan waktu
             ts="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
             mkdir -p "releases/$ts"
 
+            # Unzip aplikasi
             unzip -o app.zip -d "releases/$ts"
 
+            # Install dependencies (production only)
             cd "releases/$ts"
             if [ -f "package-lock.json" ]; then
               npm ci --omit=dev
@@ -64,14 +59,15 @@ jobs:
               npm install --omit=dev
             fi
 
+            # Update symlink 'current' ke versi terbaru (Atomic Switch)
             ln -sfn "/srv/fayaz/releases/$ts" /srv/fayaz/current
 
+            # Restart service
             sudo systemctl restart fayaz
 
+            # Health Check (Tunggu 5 detik agar service boot up)
             sleep 5
-            if ! curl -fsS http://localhost:3000/health; then
-              sudo journalctl -u fayaz -n 50 --no-pager
-              exit 1
-            fi
+            curl -fsS http://localhost:3001/health || (sudo journalctl -u fayaz -n 50 --no-pager; exit 1)
 
+            # Bersihkan rilis lama (sisakan 5 terbaru)
             ls -1dt /srv/fayaz/releases/* | tail -n +6 | xargs -r rm -rf

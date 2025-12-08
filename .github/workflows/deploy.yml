@@ -1,0 +1,82 @@
+name: deploy-ssh
+
+on:
+  workflow_dispatch:        # Bisa dijalankan manual
+  release:
+    types: [published]      # Jalan otomatis saat Release baru dibuat
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Download file app.zip dari Release terbaru
+      - name: Download app.zip from latest release
+        uses: robinraju/release-downloader@v1.11
+        with:
+          repository: ${{ github.repository }}
+          latest: true
+          fileName: "app.zip"
+
+      # 2. Add server SSH Host Key (Host Key Pinning)
+      - name: Add server host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+
+      # 3. Upload app.zip to server via SCP
+      - name: Copy app.zip to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          source: "app.zip"
+          target: "/srv/fayaz/"
+          overwrite: true
+
+      # 4. Deploy ke server via SSH
+      - name: Deploy via SSH (atomic + systemd)
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /srv/fayaz
+
+            # Timestamp untuk folder release
+            ts="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+            mkdir -p "releases/$ts"
+
+            # Unzip file ke dalam folder release
+            unzip -o app.zip -d "releases/$ts"
+
+            # Install dependencies (production)
+            cd "releases/$ts"
+            if [ -f "package-lock.json" ]; then
+              npm ci --omit=dev
+            else
+              npm install --omit=dev
+            fi
+
+            # Update symlink 'current' → rilis terbaru
+            ln -sfn "/srv/fayaz/releases/$ts" /srv/fayaz/current
+
+            # Restart systemd service
+            sudo systemctl restart fayaz
+
+            # Health check
+            sleep 5
+            curl -fsS http://localhost:3000/health \
+              || (sudo journalctl -u fayaz -n 50 --no-pager; exit 1)
+
+            # Hapus rilis lama (sisakan 5 terbaru)
+            ls -1dt /srv/fayaz/releases/* | tail -n +6 | xargs -r rm -rf

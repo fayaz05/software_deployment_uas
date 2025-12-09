@@ -1,26 +1,26 @@
+require("dotenv").config();
 const express = require('express');
 const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files from public directory
+// Serve static files
 app.use(express.static(path.join(__dirname, '../public')));
 
-// Route untuk homepage
+// Homepage
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, '../public', 'index.html'));
 });
 
-// API endpoint untuk contact form
+// API contact form
 app.post('/api/contact', (req, res) => {
     const { name, email, subject, message } = req.body;
 
-    // Validasi
     if (!name || !email || !subject || !message) {
         return res.status(400).json({
             success: false,
@@ -28,8 +28,6 @@ app.post('/api/contact', (req, res) => {
         });
     }
 
-    // Di sini Anda bisa menambahkan logika untuk mengirim email
-    // atau menyimpan ke database
     console.log('Contact Form Submission:', {
         name,
         email,
@@ -38,16 +36,13 @@ app.post('/api/contact', (req, res) => {
         timestamp: new Date().toISOString()
     });
 
-    // Simulasi pengiriman email (ganti dengan service email yang sebenarnya)
-    // Contoh: menggunakan nodemailer, sendgrid, dll
-
     res.json({
         success: true,
-        message: 'Terima kasih! Pesan Anda telah dikirim. Saya akan menghubungi Anda segera.'
+        message: 'Terima kasih! Pesan Anda telah dikirim.'
     });
 });
 
-// Health check endpoint
+// Health check
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'OK',
@@ -56,7 +51,7 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// 404 handler
+// 404
 app.use((req, res) => {
     res.status(404).sendFile(path.join(__dirname, '../public', 'index.html'));
 });
@@ -73,8 +68,6 @@ app.use((err, req, res, next) => {
 // Start server
 app.listen(PORT, () => {
     console.log(`Server berjalan di http://localhost:${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 module.exports = app;
-

@@ -19,7 +19,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download artifact (zip) dari Release GitHub
       - name: Download app.zip from latest release
         uses: robinraju/release-downloader@v1.11
         with:
@@ -27,48 +26,69 @@ jobs:
           latest: true
           fileName: "app.zip"
 
-      # 2. Copy file to server
+      - name: Check SSH credentials
+        run: |
+          if [ -z "${{ secrets.SSH_KEY }}" ] || [ -z "${{ secrets.SSH_HOST }}" ] || [ -z "${{ secrets.SSH_USER }}" ]; then
+            echo "ERROR: one or more required secrets (SSH_KEY, SSH_HOST, SSH_USER) are missing."
+            echo "Set them in Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
       - name: Copy app.zip to Server
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
           source: "app.zip"
           target: "/srv/fayaz/"
 
-      # 3. Deploy via SSH
       - name: Deploy to Server
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
           script: |
-            set -e
+            set -euo pipefail
 
-            echo "=== Ekstrak Release ==="
+            echo "=== Ensure releases dir ==="
             mkdir -p /srv/fayaz/releases
             cd /srv/fayaz
-            unzip -o app.zip -d .
 
-            # Ambil folder terbaru
-            LATEST=$(ls -td releases/* | head -n 1)
+            TIMESTAMP=$(date +%Y%m%d%H%M%S)
+            DEST="releases/$TIMESTAMP"
+            mkdir -p "$DEST"
 
-            echo "Folder terbaru: $LATEST"
+            echo "=== Extracting app.zip to $DEST ==="
+            unzip -o app.zip -d "$DEST"
 
-            echo "=== Install Dependencies ==="
-            cd $LATEST
-            npm install --production
+            # If the zip had a top-level directory, move its contents into the release dir
+            # This keeps consistent layout: /srv/fayaz/releases/<timestamp>/{app files}
+            TOP_ENTRIES=$(ls -A "$DEST" | wc -l || true)
+            if [ "$TOP_ENTRIES" -eq 1 ] && [ -d "$DEST/$(ls -A "$DEST")" ]; then
+              mv "$DEST/"*/. "$DEST/" || true
+            fi
+
+            echo "Folder terbaru: $DEST"
+
+            echo "=== Install Dependencies (if package.json exists) ==="
+            if [ -f "$DEST/package.json" ]; then
+              cd "$DEST"
+              npm install --production
+            else
+              echo "No package.json found in $DEST; skipping npm install"
+            fi
 
             echo "=== Update Symlink ==="
-            ln -sfn "$LATEST" /srv/fayaz/current
+            ln -sfn "$DEST" /srv/fayaz/current
 
             echo "=== Restart Service ==="
-            systemctl daemon-reload
-            systemctl restart fayaz
+            # Use sudo if necessary. Ensure SSH_USER can run these commands (passwordless sudo or root).
+            sudo systemctl daemon-reload || true
+            sudo systemctl restart fayaz
 
-            echo "=== Tunggu 3 detik agar server boot ==="
+            echo "=== Wait 3s for service ==="
             sleep 3
 
             echo "=== Health Check ==="
@@ -78,6 +98,6 @@ jobs:
               echo "Health check OK: $HEALTH"
             else
               echo "Health check FAILED!"
-              systemctl status fayaz --no-pager
+              sudo systemctl status fayaz --no-pager || true
               exit 1
             fi

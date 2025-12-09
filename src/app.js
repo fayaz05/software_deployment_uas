@@ -3,7 +3,7 @@ const express = require('express');
 const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json());
@@ -66,9 +66,7 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-    console.log(`Server berjalan di http://localhost:${PORT}`);
-});
+app.listen(port, () => { console.log(`Server listening on port ${port}`); });
 
 process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err && err.stack ? err.stack : err);

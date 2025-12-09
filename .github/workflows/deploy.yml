@@ -1,73 +1,81 @@
 name: deploy-ssh
+
 on:
-  workflow_dispatch: # Bisa dijalankan manual
+  workflow_dispatch:
   release:
-    types: [published] # Jalan otomatis saat Release baru dibuat
+    types: [published]
+
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       # 1. Download artifact (zip) dari Release GitHub
       - name: Download app.zip from latest release
-        uses: robinraju/release-downloader@v1.11
+        uses: robinraju/release-downloader@v1.7
         with:
           repository: ${{ github.repository }}
-          latest: true
+          tag: ${{ github.event.release.tag_name }}
           fileName: "app.zip"
-      # 2. Daftarkan Host Key Server (mencegah Man-in-the-Middle)
-      - name: Add server host key (pin)
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-      # 3. Copy file zip ke server
-      - name: Copy app.zip to server
+          out-file-path: "./"
+
+      # 2. Copy file to server
+      - name: Copy app.zip to Server
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
           source: "app.zip"
           target: "/srv/fayaz/"
-      # 4. Eksekusi Deployment via SSH
-      - name: Deploy via SSH (atomic release + systemd)
-        uses: appleboy/ssh-action@v1.1.0
+
+      # 3. Deploy via SSH
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
           script: |
-            set -euo pipefail
+            set -e
+
+            echo "=== Ekstrak Release ==="
+            mkdir -p /srv/fayaz/releases
             cd /srv/fayaz
+            unzip -o app.zip -d .
 
-            # Buat folder release unik berdasarkan waktu
-            ts="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
-            mkdir -p "releases/$ts"
+            # Ambil folder terbaru
+            LATEST=$(ls -td releases/* | head -n 1)
 
-            # Unzip aplikasi
-            unzip -o app.zip -d "releases/$ts"
+            echo "Folder terbaru: $LATEST"
 
-            # Install dependencies (production only)
-            cd "releases/$ts"
-            if [ -f "package-lock.json" ]; then
-              npm ci --omit=dev
+            echo "=== Install Dependencies ==="
+            cd $LATEST
+            npm install --production
+
+            echo "=== Update Symlink ==="
+            ln -sfn "$LATEST" /srv/fayaz/current
+
+            echo "=== Restart Service ==="
+            systemctl daemon-reload
+            systemctl restart fayaz
+
+            echo "=== Tunggu 3 detik agar server boot ==="
+            sleep 3
+
+            echo "=== Health Check ==="
+            HEALTH=$(curl -fsS http://localhost:3000/api/health || true)
+
+            if [[ "$HEALTH" == *"OK"* ]]; then
+              echo "Health check OK: $HEALTH"
             else
-              npm install --omit=dev
+              echo "Health check FAILED!"
+              systemctl status fayaz --no-pager
+              exit 1
             fi
-
-            # Update symlink 'current' ke versi terbaru (Atomic Switch)
-            ln -sfn "/srv/fayaz/releases/$ts" /srv/fayaz/current
-
-            # Restart service
-            sudo systemctl restart fayaz
-
-            # Health Check (Tunggu 5 detik agar service boot up)
-            sleep 5
-            curl -fsS http://localhost:3001/health || (sudo journalctl -u fayaz -n 50 --no-pager; exit 1)
-
-            # Bersihkan rilis lama (sisakan 5 terbaru)
-            ls -1dt /srv/fayaz/releases/* | tail -n +6 | xargs -r rm -rf

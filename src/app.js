@@ -70,4 +70,13 @@ app.listen(PORT, () => {
     console.log(`Server berjalan di http://localhost:${PORT}`);
 });
 
-module.exports = app;
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err && err.stack ? err.stack : err);
+    // beri waktu agar log flush, lalu exit (systemd bisa restart)
+    setTimeout(() => process.exit(1), 100);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection:', reason);
+    setTimeout(() => process.exit(1), 100);
+});

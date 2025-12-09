@@ -6,7 +6,7 @@ on:
       tag:
         description: 'Release tag to download (use "latest" for the latest release)'
         required: false
-        default: 'latest'
+        default: "latest"
   release:
     types: [published]
 
@@ -20,14 +20,12 @@ jobs:
 
     steps:
       # 1. Download artifact (zip) dari Release GitHub
-      - name: Download app.zip from release
-        uses: robinraju/release-downloader@v1.7
+      - name: Download app.zip from latest release
+        uses: robinraju/release-downloader@v1.11
         with:
           repository: ${{ github.repository }}
-          # prefer release event tag, otherwise use manual input (default: latest)
-          tag: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event.inputs.tag }}
+          latest: true
           fileName: "app.zip"
-          out-file-path: "./"
 
       # 2. Copy file to server
       - name: Copy app.zip to Server

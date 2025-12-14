@@ -15,3 +15,19 @@ Fayaz Node API adalah aplikasi backend berbasis **Node.js (Express)** yang berja
 ---
 
 ## 📁 Struktur Project
+├── src/
+│ └── app.js
+├── .env.example
+├── package.json
+├── package-lock.json
+├── README.md
+
+
+---
+
+## ⚙️ Requirement
+- Node.js v20+
+- npm
+- VPS Ubuntu 20.04 / 22.04
+- Git
+- systemd
